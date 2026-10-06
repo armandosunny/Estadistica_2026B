@@ -1,0 +1,891 @@
+# ============================================================
+# DISEÑO EN BLOQUES COMPLETOS AL AZAR
+# EJEMPLO: ELISA + DEGRADACIÓN TEMPORAL
+# ============================================================
+
+
+# ============================================================
+# 0. PAQUETES
+# ============================================================
+
+# Instalar SOLO la primera vez:
+# install.packages(c(
+#   "readxl",
+#   "tidyverse",
+#   "car",
+#   "emmeans",
+#   "multcomp",
+#   "multcompView",
+#   "patchwork"
+# ))
+
+library(readxl)
+library(tidyverse)
+library(car)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(patchwork)
+
+
+# ============================================================
+# 1. CARGAR LOS DATOS
+# ============================================================
+
+# Cambia la ruta si es necesario
+datos <- read_excel(
+  "ELISA_DBCA_ejercicio.xlsx",
+  sheet = "Datos"
+)
+
+# Ver datos
+View(datos)
+
+head(datos)
+
+str(datos)
+
+summary(datos)
+
+
+# ============================================================
+# 2. PREPARAR VARIABLES
+# ============================================================
+
+datos <- datos %>%
+  mutate(
+    bloque = factor(
+      bloque,
+      levels = paste0("B", 1:10)
+    ),
+
+    concentracion = factor(
+      concentracion_ng_mL,
+      levels = c(0, 25, 50, 100, 200)
+    ),
+
+    orden_en_bloque = as.numeric(orden_en_bloque),
+
+    tiempo_min = as.numeric(tiempo_min),
+
+    OD450 = as.numeric(OD450)
+  )
+
+
+# Revisar
+str(datos)
+
+head(datos)
+
+
+# ============================================================
+# 3. COMPROBAR QUE EL DISEÑO SEA COMPLETO
+# ============================================================
+
+# ¿Cuántas observaciones hay por bloque y concentración?
+table(
+  datos$bloque,
+  datos$concentracion
+)
+
+
+# Cada combinación debería aparecer UNA vez
+
+datos %>%
+  count(bloque, concentracion)
+
+
+# Número de concentraciones diferentes por bloque
+datos %>%
+  group_by(bloque) %>%
+  summarise(
+    n_concentraciones = n_distinct(concentracion),
+    .groups = "drop"
+  )
+
+
+# ============================================================
+# 4. VER CÓMO QUEDÓ LA ALEATORIZACIÓN
+# ============================================================
+
+p_diseno <- ggplot(
+  datos,
+  aes(
+    x = orden_en_bloque,
+    y = bloque,
+    fill = concentracion
+  )
+) +
+
+  geom_tile(
+    color = "white",
+    linewidth = 1.5
+  ) +
+
+  geom_text(
+    aes(label = concentracion),
+    size = 5,
+    fontface = "bold"
+  ) +
+
+  scale_x_continuous(
+    breaks = 1:5
+  ) +
+
+  scale_fill_viridis_d(
+    option = "turbo",
+    end = 0.90
+  ) +
+
+  labs(
+    title = "Diseño en bloques completos al azar",
+    subtitle =
+      "Cada bloque contiene las cinco concentraciones, pero su posición fue asignada al azar",
+    x = "Orden de procesamiento dentro del bloque",
+    y = "Bloque temporal",
+    fill = "Concentración\n(ng/mL)"
+  ) +
+
+  theme_minimal(base_size = 15) +
+
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(
+      face = "bold",
+      size = 20
+    ),
+    plot.subtitle = element_text(
+      size = 12
+    ),
+    axis.title = element_text(
+      face = "bold"
+    ),
+    legend.position = "right"
+  )
+
+p_diseno
+
+
+
+
+
+
+##Explorar los datos antes de hacer ANOVA
+
+p_box <- ggplot(
+  datos,
+  aes(
+    x = concentracion,
+    y = OD450,
+    fill = concentracion
+  )
+) +
+
+  geom_violin(
+    alpha = 0.35,
+    trim = FALSE
+  ) +
+
+  geom_boxplot(
+    width = 0.20,
+    alpha = 0.75,
+    outlier.shape = NA
+  ) +
+
+  geom_jitter(
+    width = 0.08,
+    size = 2.8,
+    alpha = 0.8
+  ) +
+
+  scale_fill_viridis_d(
+    option = "turbo"
+  ) +
+
+  labs(
+    title = "Absorbancia según concentración",
+    subtitle = "Cada punto representa una muestra ELISA",
+    x = "Concentración (ng/mL)",
+    y = "Absorbancia OD450"
+  ) +
+
+  theme_classic(base_size = 15) +
+
+  theme(
+    legend.position = "none",
+    plot.title = element_text(
+      face = "bold",
+      size = 19
+    ),
+    axis.title = element_text(
+      face = "bold"
+    )
+  )
+
+p_box
+
+##Ver el comportamiento entre bloques
+
+
+p_lineas <- ggplot(
+  datos,
+  aes(
+    x = bloque,
+    y = OD450,
+    color = concentracion,
+    group = concentracion
+  )
+) +
+
+  geom_line(
+    linewidth = 1
+  ) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  scale_color_viridis_d(
+    option = "turbo"
+  ) +
+
+  labs(
+    title = "Comportamiento de las concentraciones entre bloques",
+    subtitle = "Cada línea representa una concentración",
+    x = "Bloque temporal",
+    y = "Absorbancia OD450",
+    color = "Concentración\n(ng/mL)"
+  ) +
+
+  theme_classic(base_size = 15) +
+
+  theme(
+    plot.title = element_text(
+      face = "bold"
+    ),
+    axis.title = element_text(
+      face = "bold"
+    ),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+p_lineas
+
+
+
+##Rendimiento —o en este caso OD— promedio por bloque
+
+medias_bloque <- datos %>%
+  group_by(bloque) %>%
+  summarise(
+    media_OD = mean(OD450),
+    sd_OD = sd(OD450),
+    .groups = "drop"
+  )
+
+medias_bloque
+
+
+##Gráfica
+
+p_bloques <- ggplot(
+  medias_bloque,
+  aes(
+    x = bloque,
+    y = media_OD,
+    group = 1
+  )
+) +
+
+  geom_line(
+    linewidth = 1.1
+  ) +
+
+  geom_point(
+    size = 4
+  ) +
+
+  labs(
+    title = "Absorbancia promedio por bloque",
+    subtitle = "Los bloques representan momentos sucesivos del procesamiento",
+    x = "Bloque temporal",
+    y = "OD450 promedio"
+  ) +
+
+  theme_classic(base_size = 15) +
+
+  theme(
+    plot.title = element_text(
+      face = "bold"
+    ),
+    axis.title = element_text(
+      face = "bold"
+    )
+  )
+
+p_bloques
+
+
+#MODELO DBCA
+
+m1 <- lm(
+  OD450 ~ bloque + concentracion,
+  data = datos
+)
+
+anova(m1)
+
+summary(m1)
+
+#Revisar supuestos del ANOVA
+
+
+
+diagnostico <- datos %>%
+  mutate(
+    ajustado = fitted(m1),
+    residuo = residuals(m1),
+    residuo_student = rstudent(m1),
+    cook = cooks.distance(m1)
+  )
+
+head(diagnostico)
+
+
+#Normalidad de residuos: histograma
+
+p_hist <- ggplot(
+  diagnostico,
+  aes(x = residuo)
+) +
+
+  geom_histogram(
+    bins = 10,
+    color = "white",
+    alpha = 0.8
+  ) +
+
+  geom_vline(
+    xintercept = 0,
+    linetype = 2
+  ) +
+
+  labs(
+    title = "Distribución de los residuos",
+    x = "Residuo",
+    y = "Frecuencia"
+  ) +
+
+  theme_classic(base_size = 14)
+
+p_hist
+
+###Normalidad: Q-Q plot
+
+p_qq <- ggplot(
+  diagnostico,
+  aes(sample = residuo)
+) +
+
+  stat_qq(
+    size = 3
+  ) +
+
+  stat_qq_line(
+    linewidth = 1
+  ) +
+
+  labs(
+    title = "Normalidad de los residuos",
+    subtitle = "Q-Q plot",
+    x = "Cuantiles teóricos",
+    y = "Cuantiles observados"
+  ) +
+
+  theme_classic(base_size = 14)
+
+p_qq
+
+
+#Shapiro-Wilk
+
+shapiro.test(
+  residuals(m1)
+)
+
+
+#Homogeneidad de varianzas
+leveneTest(
+  OD450 ~ concentracion,
+  data = datos
+)
+
+
+
+leveneTest(
+  residuo ~ concentracion,
+  data = diagnostico
+)
+
+
+
+
+
+
+###Residuos vs valores ajustados
+
+
+p_res <- ggplot(
+  diagnostico,
+  aes(
+    x = ajustado,
+    y = residuo
+  )
+) +
+
+  geom_point(
+    size = 3,
+    alpha = 0.8
+  ) +
+
+  geom_hline(
+    yintercept = 0,
+    linetype = 2
+  ) +
+
+  geom_smooth(
+    method = "loess",
+    se = FALSE
+  ) +
+
+  labs(
+    title = "Residuos vs valores ajustados",
+    x = "Valores ajustados",
+    y = "Residuos"
+  ) +
+
+  theme_classic(base_size = 14)
+
+p_res
+
+
+#Ver varios diagnósticos juntos
+
+(p_hist | p_qq) /
+  p_res
+
+#ANOVA formal del DBCA
+
+anova(m1)
+
+OD450 ~ bloque + concentracion
+
+
+#Modelo con aov()
+
+m_aov <- aov(
+  OD450 ~ bloque + concentracion,
+  data = datos
+)
+
+summary(m_aov)
+
+lm()
+
+
+#Estructura explícita del bloque
+
+m_error <- aov(
+  OD450 ~ concentracion +
+    Error(bloque),
+  data = datos
+)
+
+summary(m_error)
+
+
+##Comparaciones múltiples: emmeans + Tukey
+
+emm <- emmeans(
+  m1,
+  ~ concentracion
+)
+
+emm
+
+
+pairs(
+  emm,
+  adjust = "tukey"
+)
+
+
+letras <- multcomp::cld(
+  emm,
+  Letters = letters,
+  adjust = "tukey"
+)
+
+letras
+
+
+
+#limpiamos
+
+letras_df <- as.data.frame(letras) %>%
+  mutate(
+    .group = trimws(.group)
+  )
+
+letras_df
+
+
+#####Gráfica final: medias ajustadas + IC 95% + letras
+
+
+p_final <- ggplot(
+  letras_df,
+  aes(
+    x = concentracion,
+    y = emmean
+  )
+) +
+
+  geom_errorbar(
+    aes(
+      ymin = lower.CL,
+      ymax = upper.CL
+    ),
+    width = 0.10,
+    linewidth = 0.9
+  ) +
+
+  geom_point(
+    size = 4.5
+  ) +
+
+  geom_text(
+    aes(
+      y = upper.CL + 0.08,
+      label = .group
+    ),
+    size = 5.5,
+    fontface = "bold"
+  ) +
+
+  labs(
+    title = "Efecto de la concentración sobre la señal ELISA",
+    subtitle = "Medias ajustadas por bloque e IC 95%",
+    x = "Concentración (ng/mL)",
+    y = "OD450 ajustada"
+  ) +
+
+  theme_classic(base_size = 16) +
+
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 20
+    ),
+    plot.subtitle = element_text(
+      size = 13
+    ),
+    axis.title = element_text(
+      face = "bold"
+    )
+  )
+
+p_final
+
+
+##Ver OD contra tiempo
+
+
+p_tiempo <- ggplot(
+  datos,
+  aes(
+    x = tiempo_min,
+    y = OD450,
+    color = concentracion
+  )
+) +
+
+  geom_point(
+    size = 3.5,
+    alpha = 0.85
+  ) +
+
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    linewidth = 1
+  ) +
+
+  scale_color_viridis_d(
+    option = "turbo"
+  ) +
+
+  labs(
+    title = "Cambio de la señal ELISA a través del tiempo",
+    subtitle = "Cada color representa una concentración",
+    x = "Tiempo transcurrido (min)",
+    y = "Absorbancia OD450",
+    color = "Concentración\n(ng/mL)"
+  ) +
+
+  theme_classic(base_size = 15) +
+
+  theme(
+    plot.title = element_text(
+      face = "bold"
+    ),
+    axis.title = element_text(
+      face = "bold"
+    )
+  )
+
+p_tiempo
+
+
+
+###Modelo para probar directamente el efecto del tiempo
+
+
+m_tiempo <- lm(
+  OD450 ~ concentracion + tiempo_min,
+  data = datos
+)
+
+anova(m_tiempo)
+
+summary(m_tiempo)
+
+
+
+#Revisar el coeficiente de tiempo
+
+
+summary(m_tiempo)$coefficients
+
+
+
+####¿El efecto del tiempo depende de la concentración?
+
+
+m_interaccion <- lm(
+  OD450 ~ concentracion * tiempo_min,
+  data = datos
+)
+
+anova(m_interaccion)
+
+summary(m_interaccion)
+
+
+
+concentracion:tiempo_min
+
+
+
+###Comparar modelo sin y con interacción
+
+
+anova(
+  m_tiempo,
+  m_interaccion
+)
+
+
+OD450 ~ concentracion + tiempo_min
+
+
+
+####gráfica para mostrar degradación
+
+
+datos_relativos <- datos %>%
+  group_by(concentracion) %>%
+  arrange(tiempo_min) %>%
+  mutate(
+    OD_relativa = OD450 / first(OD450) * 100
+  ) %>%
+  ungroup()
+
+
+
+ggplot(
+  datos_relativos,
+  aes(
+    x = tiempo_min,
+    y = OD_relativa,
+    color = concentracion
+  )
+) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    linewidth = 1
+  ) +
+
+  geom_hline(
+    yintercept = 100,
+    linetype = 2
+  ) +
+
+  scale_color_viridis_d(
+    option = "turbo"
+  ) +
+
+  labs(
+    title = "Pérdida relativa de señal ELISA con el tiempo",
+    subtitle = "Primer registro de cada concentración = 100%",
+    x = "Tiempo transcurrido (min)",
+    y = "Señal relativa (%)",
+    color = "Concentración\n(ng/mL)"
+  ) +
+
+  theme_classic(base_size = 15) +
+
+  theme(
+    plot.title = element_text(
+      face = "bold"
+    ),
+    axis.title = element_text(
+      face = "bold"
+    )
+  )
+
+
+#####Temperatura como variable adicional
+
+
+
+ggplot(
+  datos,
+  aes(
+    x = temperatura_C,
+    y = OD450,
+    color = concentracion
+  )
+) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  scale_color_viridis_d(
+    option = "turbo"
+  ) +
+
+  labs(
+    title = "Relación entre temperatura y señal ELISA",
+    x = "Temperatura (°C)",
+    y = "OD450",
+    color = "Concentración"
+  ) +
+
+  theme_classic(base_size = 14)
+
+
+
+
+###modelo
+
+m_temp <- lm(
+  OD450 ~ concentracion +
+    tiempo_min +
+    temperatura_C,
+  data = datos
+)
+
+anova(m_temp)
+
+summary(m_temp)
+
+
+
+###Figura compuesta
+
+figura_general <-
+  (p_diseno | p_box) /
+  (p_lineas | p_final)
+
+figura_general
+
+
+
+
+
+####Guardar las gráficas
+
+
+
+ggsave(
+  "01_diseno_bloques_ELISA.png",
+  p_diseno,
+  width = 12,
+  height = 7,
+  dpi = 400
+)
+
+ggsave(
+  "02_concentraciones_ELISA.png",
+  p_box,
+  width = 9,
+  height = 7,
+  dpi = 400
+)
+
+ggsave(
+  "03_bloques_ELISA.png",
+  p_lineas,
+  width = 11,
+  height = 7,
+  dpi = 400
+)
+
+ggsave(
+  "04_emmeans_ELISA.png",
+  p_final,
+  width = 9,
+  height = 7,
+  dpi = 400
+)
+
+ggsave(
+  "05_tiempo_ELISA.png",
+  p_tiempo,
+  width = 10,
+  height = 7,
+  dpi = 400
+)
+
+ggsave(
+  "06_figura_completa_ELISA.png",
+  figura_general,
+  width = 16,
+  height = 12,
+  dpi = 400
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
