@@ -1,0 +1,1252 @@
+
+############################################################
+# DISEÑO FACTORIAL 3 x 2 EN BIOTECNOLOGÍA
+# Ejemplo: expresión de proteína recombinante soluble en E. coli
+#
+# Factor A: temperatura de inducción = 20, 30, 37 °C
+# Factor B: IPTG = 0.1, 0.5 mM
+# Réplicas: 5 por combinación
+# Variable respuesta: proteina_soluble_mg_L
+#
+# OBJETIVOS:
+# 1) Evaluar el efecto de la temperatura.
+# 2) Evaluar el efecto de la concentración de IPTG.
+# 3) Evaluar la interacción temperatura x IPTG.
+# 4) Revisar supuestos del ANOVA factorial.
+# 5) Realizar comparaciones post hoc / efectos simples.
+# 6) Obtener tamaños de efecto y gráficas de publicación.
+############################################################
+
+
+# ============================================================
+# 0. PAQUETES
+# ============================================================
+
+# Instalar una sola vez si hace falta:
+# install.packages(c(
+#   "readxl", "dplyr", "ggplot2", "car",
+#   "emmeans", "effectsize", "performance",
+#   "rstatix", "patchwork"
+# ))
+
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(car)
+library(emmeans)
+library(effectsize)
+library(performance)
+library(rstatix)
+library(patchwork)
+
+
+# ============================================================
+# 1. IMPORTAR LOS DATOS
+# ============================================================
+
+# Cambiar la ruta a la carpeta donde se guardó el Excel.
+# setwd("C:/Users/tu_usuario/Desktop")
+
+datos <- read_excel(
+  "Diseno_factorial_biotecnologia_3x2_sin_outliers.xlsx",
+  sheet = "Datos"
+)
+
+head(datos)
+str(datos)
+summary(datos)
+
+
+# ============================================================
+# 2. PREPARAR LOS FACTORES
+# ============================================================
+
+datos <- datos %>%
+  mutate(
+    temperatura = factor(
+      temperatura_C,
+      levels = c(20, 30, 37),
+      labels = c("20 °C", "30 °C", "37 °C")
+    ),
+    IPTG = factor(
+      IPTG_mM,
+      levels = c(0.1, 0.5),
+      labels = c("0.1 mM", "0.5 mM")
+    )
+  )
+
+str(datos)
+
+# Verificar número de observaciones por combinación:
+with(datos, table(temperatura, IPTG))
+
+# Deben existir 5 réplicas en cada celda del diseño.
+
+
+# ============================================================
+# 3. COMPROBAR DATOS FALTANTES Y DUPLICADOS
+# ============================================================
+
+colSums(is.na(datos))
+
+sum(duplicated(datos$muestra))
+datos[duplicated(datos$muestra), ]
+
+
+# ============================================================
+# 4. ESTADÍSTICA DESCRIPTIVA
+# ============================================================
+
+resumen <- datos %>%
+  group_by(temperatura, IPTG) %>%
+  summarise(
+    n = n(),
+    media = mean(proteina_soluble_mg_L),
+    DE = sd(proteina_soluble_mg_L),
+    EE = DE / sqrt(n),
+    mediana = median(proteina_soluble_mg_L),
+    minimo = min(proteina_soluble_mg_L),
+    maximo = max(proteina_soluble_mg_L),
+    .groups = "drop"
+  )
+
+resumen
+
+
+# ============================================================
+# 5. EXPLORACIÓN GRÁFICA INICIAL
+# ============================================================
+
+# ------------------------------------------------------------
+# 5.1 Boxplot + puntos individuales
+# ------------------------------------------------------------
+
+g1 <- ggplot(
+  datos,
+  aes(
+    x = temperatura,
+    y = proteina_soluble_mg_L,
+    fill = IPTG
+  )
+) +
+  geom_boxplot(
+    position = position_dodge(width = 0.8),
+    width = 0.65,
+    alpha = 0.75,
+    outlier.shape = NA
+  ) +
+  geom_point(
+    aes(group = IPTG),
+    position = position_jitterdodge(
+      jitter.width = 0.10,
+      dodge.width = 0.8
+    ),
+    size = 2.5,
+    alpha = 0.85
+  ) +
+  labs(
+    title = "Producción de proteína recombinante",
+    subtitle = "Diseño factorial: temperatura × concentración de IPTG",
+    x = "Temperatura de inducción",
+    y = "Proteína soluble (mg/L)",
+    fill = "IPTG"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(face = "bold")
+  )
+
+g1
+
+
+# ------------------------------------------------------------
+# 5.2 Gráfica de interacción con media ± error estándar
+# ------------------------------------------------------------
+
+g2 <- ggplot(
+  resumen,
+  aes(
+    x = temperatura,
+    y = media,
+    group = IPTG,
+    linetype = IPTG,
+    shape = IPTG
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3.5) +
+  geom_errorbar(
+    aes(
+      ymin = media - EE,
+      ymax = media + EE
+    ),
+    width = 0.08,
+    linewidth = 0.7
+  ) +
+  labs(
+    title = "Interacción temperatura × IPTG",
+    subtitle = "Media ± error estándar",
+    x = "Temperatura de inducción",
+    y = "Proteína soluble (mg/L)",
+    linetype = "IPTG",
+    shape = "IPTG"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(face = "bold")
+  )
+
+g2
+
+# INTERPRETACIÓN VISUAL:
+# Líneas aproximadamente paralelas -> poca evidencia de interacción.
+# Líneas no paralelas o que se cruzan -> posible interacción.
+# La significancia se determina formalmente con el ANOVA.
+
+
+# ============================================================
+# 6. MODELO FACTORIAL COMPLETO
+# ============================================================
+
+modelo <- lm(
+  proteina_soluble_mg_L ~ temperatura * IPTG,
+  data = datos
+)
+
+summary(modelo)
+
+# ANOVA factorial:
+anova(modelo)
+
+# También se puede usar:
+modelo_aov <- aov(
+  proteina_soluble_mg_L ~ temperatura * IPTG,
+  data = datos
+)
+
+summary(modelo_aov)
+
+
+# ============================================================
+# 7. ANOVA TIPO II Y TIPO III
+# ============================================================
+
+# Para un diseño BALANCEADO como éste, el ANOVA clásico es suficiente.
+# Se muestran también estas variantes con fines didácticos.
+
+Anova(modelo, type = 2)
+
+# Tipo III:
+# Es importante usar contrastes de suma antes de ajustar el modelo.
+
+options(contrasts = c("contr.sum", "contr.poly"))
+
+modelo_tipo3 <- lm(
+  proteina_soluble_mg_L ~ temperatura * IPTG,
+  data = datos
+)
+
+Anova(modelo_tipo3, type = 3)
+
+# Regresar a los contrastes habituales si se desea:
+options(contrasts = c("contr.treatment", "contr.poly"))
+
+
+# ============================================================
+# 8. SUPUESTO DE INDEPENDENCIA
+# ============================================================
+
+# La independencia NO se demuestra con una prueba estadística.
+# Se garantiza principalmente mediante el diseño experimental:
+# - réplicas independientes,
+# - asignación aleatoria,
+# - ausencia de pseudorreplicación.
+
+# Como exploración adicional, podemos graficar residuos contra
+# el orden en que se procesaron las unidades.
+
+datos$residuos <- residuals(modelo)
+datos$ajustados <- fitted(modelo)
+
+g3 <- ggplot(
+  datos,
+  aes(
+    x = orden_aleatorio,
+    y = residuos
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = 2
+  ) +
+  geom_point(size = 2.8) +
+  geom_smooth(
+    method = "loess",
+    se = FALSE,
+    linewidth = 0.9
+  ) +
+  labs(
+    title = "Residuos según el orden experimental",
+    x = "Orden de procesamiento",
+    y = "Residuos"
+  ) +
+  theme_classic(base_size = 14)
+
+g3
+
+
+# ============================================================
+# 9. DETECCIÓN DE OBSERVACIONES ATÍPICAS
+# ============================================================
+
+# 9.1 Outliers por combinación factorial usando rstatix:
+outliers_grupo <- datos %>%
+  group_by(temperatura, IPTG) %>%
+  identify_outliers(proteina_soluble_mg_L)
+
+outliers_grupo
+
+# rstatix identifica observaciones con criterio del rango intercuartílico.
+# No se deben eliminar automáticamente.
+
+
+# 9.2 Residuos studentizados:
+res_student <- rstudent(modelo)
+
+datos$residuo_studentizado <- res_student
+
+datos %>%
+  arrange(desc(abs(residuo_studentizado))) %>%
+  select(
+    muestra,
+    temperatura,
+    IPTG,
+    proteina_soluble_mg_L,
+    residuo_studentizado
+  )
+
+# Regla exploratoria:
+# |residuo studentizado| > 3 puede indicar una observación inusual.
+
+
+# 9.3 Distancia de Cook:
+datos$cook <- cooks.distance(modelo)
+
+datos %>%
+  arrange(desc(cook)) %>%
+  select(
+    muestra,
+    temperatura,
+    IPTG,
+    proteina_soluble_mg_L,
+    cook
+  )
+
+# Umbral exploratorio frecuente:
+umbral_cook <- 4 / nrow(datos)
+umbral_cook
+
+datos %>%
+  filter(cook > umbral_cook)
+
+
+# Gráfica de Cook:
+g4 <- ggplot(
+  datos,
+  aes(
+    x = orden_aleatorio,
+    y = cook
+  )
+) +
+  geom_hline(
+    yintercept = umbral_cook,
+    linetype = 2
+  ) +
+  geom_segment(
+    aes(
+      xend = orden_aleatorio,
+      y = 0,
+      yend = cook
+    ),
+    linewidth = 0.7
+  ) +
+  geom_point(size = 2.2) +
+  labs(
+    title = "Distancia de Cook",
+    subtitle = "La línea horizontal representa 4/n",
+    x = "Observación",
+    y = "Distancia de Cook"
+  ) +
+  theme_classic(base_size = 14)
+
+g4
+
+
+# ============================================================
+# 10. NORMALIDAD DE LOS RESIDUOS
+# ============================================================
+
+# IMPORTANTE:
+# En ANOVA se evalúa la normalidad de los RESIDUOS del modelo,
+# no necesariamente la normalidad de cada tratamiento por separado.
+
+shapiro.test(residuals(modelo))
+
+# H0: los residuos siguen una distribución normal.
+# p > 0.05 -> no hay evidencia suficiente para rechazar normalidad.
+# p < 0.05 -> hay evidencia de desviación de la normalidad.
+
+
+# ------------------------------------------------------------
+# 10.1 Q-Q plot bonito
+# ------------------------------------------------------------
+
+g5 <- ggplot(
+  data.frame(residuos = residuals(modelo)),
+  aes(sample = residuos)
+) +
+  stat_qq(size = 2.7) +
+  stat_qq_line(linewidth = 0.9) +
+  labs(
+    title = "Normalidad de los residuos",
+    subtitle = "Gráfica Q-Q",
+    x = "Cuantiles teóricos",
+    y = "Cuantiles observados"
+  ) +
+  theme_classic(base_size = 14)
+
+g5
+
+
+# ------------------------------------------------------------
+# 10.2 Histograma de residuos
+# ------------------------------------------------------------
+
+g6 <- ggplot(
+  data.frame(residuos = residuals(modelo)),
+  aes(x = residuos)
+) +
+  geom_histogram(
+    bins = 8,
+    boundary = 0
+  ) +
+  labs(
+    title = "Distribución de los residuos",
+    x = "Residuos",
+    y = "Frecuencia"
+  ) +
+  theme_classic(base_size = 14)
+
+g6
+
+
+# ============================================================
+# 11. HOMOGENEIDAD DE VARIANZAS
+# ============================================================
+
+# Para un diseño factorial debemos considerar las COMBINACIONES
+# de los factores.
+
+datos$tratamiento <- interaction(
+  datos$temperatura,
+  datos$IPTG,
+  sep = " / "
+)
+
+# Prueba de Levene:
+leveneTest(
+  proteina_soluble_mg_L ~ tratamiento,
+  data = datos,
+  center = median
+)
+
+# H0: las varianzas son iguales entre combinaciones.
+# p > 0.05 -> no se rechaza homogeneidad.
+# p < 0.05 -> posible heterocedasticidad.
+
+
+# ------------------------------------------------------------
+# 11.1 Residuos vs valores ajustados
+# ------------------------------------------------------------
+
+g7 <- ggplot(
+  datos,
+  aes(
+    x = ajustados,
+    y = residuos
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = 2
+  ) +
+  geom_point(size = 2.8) +
+  geom_smooth(
+    method = "loess",
+    se = FALSE,
+    linewidth = 0.9
+  ) +
+  labs(
+    title = "Residuos vs valores ajustados",
+    x = "Valores ajustados",
+    y = "Residuos"
+  ) +
+  theme_classic(base_size = 14)
+
+g7
+
+# Lo ideal es observar una nube relativamente aleatoria alrededor de cero,
+# sin forma de embudo ni patrón curvo marcado.
+
+
+
+
+# ============================================================
+# 13. INTERPRETAR EL ANOVA FACTORIAL
+# ============================================================
+
+anova(modelo)
+
+# ORDEN DE INTERPRETACIÓN:
+#
+# 1. Revisar primero:
+#       temperatura:IPTG
+#
+# 2. Si la interacción ES significativa (p < 0.05):
+#       NO interpretar los efectos principales de forma aislada.
+#       Realizar análisis de efectos simples.
+#
+# 3. Si la interacción NO es significativa:
+#       interpretar temperatura e IPTG como efectos principales.
+
+
+# ============================================================
+# 14. TAMAÑOS DE EFECTO
+# ============================================================
+
+effectsize::eta_squared(
+  modelo_aov,
+  partial = TRUE
+)
+
+# El eta cuadrado parcial estima qué proporción de variabilidad
+# está asociada con cada término, controlando los demás términos.
+
+#Efecto	η² parcial	Interpretación
+#Temperatura	0.97	efecto extremadamente grande
+#IPTG	0.86	efecto extremadamente grande
+#Temperatura × IPTG	0.91	interacción extremadamente grande
+
+
+
+
+# ============================================================
+# 15. EFECTOS SIMPLES CON EMMEANS
+# ============================================================
+
+# Esta sección es especialmente importante cuando la interacción
+# temperatura × IPTG es significativa.
+
+
+# ------------------------------------------------------------
+# 15.1 Comparar IPTG dentro de cada temperatura
+# ------------------------------------------------------------
+
+#emmeans te da, para cada temperatura, cuánto se espera producir con 0.1 y 0.5 mM de IPTG.
+
+emm_IPTG_por_temp <- emmeans(
+  modelo,
+  ~ IPTG | temperatura
+)
+
+emm_IPTG_por_temp
+
+pairs(
+  emm_IPTG_por_temp,
+  adjust = "tukey"
+)
+
+
+# ------------------------------------------------------------
+# 15.2 Comparar temperaturas dentro de cada nivel de IPTG
+# ------------------------------------------------------------
+
+emm_temp_por_IPTG <- emmeans(
+  modelo,
+  ~ temperatura | IPTG
+)
+
+emm_temp_por_IPTG
+
+pairs(
+  emm_temp_por_IPTG,
+  adjust = "tukey"
+)
+
+
+# ============================================================
+# 16. MEDIAS MARGINALES ESTIMADAS
+# ============================================================
+
+emm_combinaciones <- emmeans(
+  modelo,
+  ~ temperatura * IPTG
+)
+
+emm_combinaciones
+
+# Comparación entre todas las combinaciones:
+pairs(
+  emm_combinaciones,
+  adjust = "tukey"
+)
+
+
+# ============================================================
+# INTERPRETACIÓN DE emmeans Y COMPARACIONES POR TEMPERATURA
+# ============================================================
+
+# emmeans calcula las medias marginales estimadas de cada nivel
+# de IPTG dentro de cada temperatura.
+#
+# Esto permite estudiar los EFECTOS SIMPLES del IPTG, es decir:
+# evaluar si el efecto del IPTG cambia dependiendo de la temperatura.
+#
+# A 20 °C:
+# 0.5 mM produce más proteína que 0.1 mM
+# diferencia ≈ 10.3 mg/L, p < 0.0001
+#
+# A 30 °C:
+# 0.5 mM produce más proteína que 0.1 mM
+# diferencia ≈ 20.2 mg/L, p < 0.0001
+#
+# A 37 °C:
+# ocurre lo contrario:
+# 0.1 mM produce más proteína que 0.5 mM
+# diferencia ≈ 5.7 mg/L, p < 0.0001
+#
+# CONCLUSIÓN:
+# El efecto del IPTG depende de la temperatura.
+# A 20 y 30 °C, aumentar IPTG favorece la producción de proteína,
+# pero a 37 °C aumentar IPTG reduce la producción.
+#
+# Este cambio en la magnitud e incluso en la dirección del efecto
+# es una evidencia clara de interacción temperatura × IPTG.
+
+
+# ============================================================
+# GRÁFICAS DE LAS COMPARACIONES DE TUKEY
+# ============================================================
+
+library(emmeans)
+library(ggplot2)
+library(dplyr)
+
+# Para las letras de Tukey:
+# install.packages(c("multcomp", "multcompView"))
+library(multcomp)
+library(multcompView)
+
+# ============================================================
+# MEDIAS ESTIMADAS DE TEMPERATURA DENTRO DE CADA NIVEL DE IPTG
+# ============================================================
+
+emm_temp_por_IPTG <- emmeans(
+  modelo,
+  ~ temperatura | IPTG
+)
+
+emm_temp_por_IPTG
+
+# ============================================================
+# 1. CONTRASTES DE TUKEY:
+# TEMPERATURAS DENTRO DE CADA NIVEL DE IPTG
+# ============================================================
+
+tukey_temp <- pairs(
+  emm_temp_por_IPTG,
+  adjust = "tukey"
+)
+
+# Convertir a data frame
+tukey_temp_df <- as.data.frame(
+  confint(tukey_temp)
+)
+
+tukey_temp_df
+
+
+
+g_tukey_temp <- ggplot(
+  tukey_temp_df,
+  aes(
+    x = estimate,
+    y = contrast
+  )
+) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  geom_errorbar(
+    aes(
+      xmin = lower.CL,
+      xmax = upper.CL
+    ),
+    width = 0.20,
+    linewidth = 0.8
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  facet_wrap(
+    ~ IPTG,
+    scales = "free_y"
+  ) +
+  labs(
+    title = "Comparaciones de Tukey entre temperaturas",
+    subtitle = "Comparaciones realizadas dentro de cada concentración de IPTG",
+    x = "Diferencia entre medias (mg/L)",
+    y = "Comparación"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      hjust = 0.5
+    ),
+    strip.text = element_text(
+      face = "bold",
+      size = 12
+    )
+  )
+
+g_tukey_temp
+
+
+
+
+
+# ============================================================
+# CREAR LAS LETRAS DE TUKEY
+# ============================================================
+
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(dplyr)
+
+# Medias marginales estimadas
+emm_combinaciones <- emmeans(
+  modelo,
+  ~ temperatura * IPTG
+)
+
+# Letras de comparación múltiple de Tukey
+letras <- multcomp::cld(
+  emm_combinaciones,
+  adjust = "tukey",
+  Letters = letters,
+  alpha = 0.05
+)
+
+# Convertir a data frame
+letras_df <- as.data.frame(letras) %>%
+  mutate(
+    .group = trimws(.group)
+  )
+
+# Ver resultado
+letras_df
+
+
+
+
+
+
+# ============================================================
+# GRÁFICA DE INTERACCIÓN + IC95% + LETRAS DE TUKEY
+# ============================================================
+
+library(ggplot2)
+
+g_letras_puntos <- ggplot(
+  letras_df,
+  aes(
+    x = temperatura,
+    y = emmean,
+    shape = IPTG,
+    group = IPTG
+  )
+) +
+  geom_line(
+    aes(linetype = IPTG),
+    linewidth = 1
+  ) +
+  geom_point(
+    size = 4
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower.CL,
+      ymax = upper.CL
+    ),
+    width = 0.10,
+    linewidth = 0.8
+  ) +
+  geom_text(
+    aes(
+      label = .group,
+      y = upper.CL + 3
+    ),
+    size = 5,
+    fontface = "bold"
+  ) +
+  labs(
+    title = "Interacción temperatura × IPTG",
+    subtitle = "Medias marginales estimadas e IC 95%; letras diferentes indican diferencias de Tukey",
+    x = "Temperatura de inducción",
+    y = "Proteína soluble (mg/L)",
+    shape = "IPTG",
+    linetype = "IPTG"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(
+      face = "bold",
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      hjust = 0.5
+    )
+  ) +
+  expand_limits(
+    y = max(letras_df$upper.CL) + 7
+  )
+
+g_letras_puntos
+
+
+
+
+
+# ============================================================
+# HEATMAP DEL DISEÑO FACTORIAL
+# Media estimada + letras de Tukey
+# ============================================================
+
+library(ggplot2)
+library(dplyr)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+
+# 1. Medias marginales
+emm_combinaciones <- emmeans(
+  modelo,
+  ~ temperatura * IPTG
+)
+
+# 2. Letras de Tukey
+letras <- multcomp::cld(
+  emm_combinaciones,
+  adjust = "tukey",
+  Letters = letters,
+  alpha = 0.05
+)
+
+# 3. Convertir a data frame
+letras_df <- as.data.frame(letras) %>%
+  mutate(
+    .group = trimws(.group),
+
+    # Texto que aparecerá dentro de cada celda
+    etiqueta = paste0(
+      round(emmean, 1),
+      " mg/L\n",
+      "(", .group, ")"
+    )
+  )
+
+letras_df
+
+
+
+# ============================================================
+# CREAR DATA FRAME CON LETRAS Y ETIQUETAS
+# ============================================================
+
+library(dplyr)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+
+# Medias marginales
+emm_combinaciones <- emmeans(
+  modelo,
+  ~ temperatura * IPTG
+)
+
+# Letras de Tukey
+letras <- multcomp::cld(
+  emm_combinaciones,
+  adjust = "tukey",
+  Letters = letters,
+  alpha = 0.05
+)
+
+# Convertir a data frame y crear etiqueta
+letras_df <- as.data.frame(letras) %>%
+  mutate(
+    .group = trimws(.group),
+
+    etiqueta = paste0(
+      round(emmean, 1),
+      "\n",
+      .group
+    )
+  )
+
+# Revisar
+letras_df
+
+
+
+# ============================================================
+# HEATMAP
+# ============================================================
+
+heatmap_factorial <- ggplot(
+  letras_df,
+  aes(
+    x = IPTG,
+    y = temperatura,
+    fill = emmean
+  )
+) +
+
+  geom_tile(
+    color = "white",
+    linewidth = 2
+  ) +
+
+  geom_text(
+    aes(label = etiqueta),
+    size = 5,
+    fontface = "bold"
+  ) +
+
+  scale_fill_gradient(
+    low = "lightyellow",
+    high = "darkred"
+  ) +
+
+  labs(
+    title = "Producción de proteína recombinante",
+    subtitle = "Efecto combinado de temperatura e IPTG",
+    x = "Concentración de IPTG",
+    y = "Temperatura de inducción",
+    fill = "Proteína\n(mg/L)",
+    caption = "Valores: medias marginales estimadas. Letras diferentes indican diferencias significativas (Tukey, p < 0.05)."
+  ) +
+
+  theme_minimal(base_size = 14) +
+
+  theme(
+    panel.grid = element_blank(),
+
+    plot.title = element_text(
+      face = "bold",
+      size = 17,
+      hjust = 0.5
+    ),
+
+    plot.subtitle = element_text(
+      hjust = 0.5
+    ),
+
+    axis.text = element_text(
+      size = 13,
+      face = "bold"
+    ),
+
+    axis.title = element_text(
+      face = "bold"
+    ),
+
+    legend.position = "right"
+  )
+
+heatmap_factorial
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# TUKEY ENTRE TODAS LAS COMBINACIONES
+# ============================================================
+
+tukey_todas <- pairs(
+  emm_combinaciones,
+  adjust = "tukey"
+)
+
+tukey_todas_df <- as.data.frame(
+  confint(tukey_todas)
+)
+
+tukey_todas_df
+
+
+
+
+g_tukey_todas <- ggplot(
+  tukey_todas_df,
+  aes(
+    x = estimate,
+    y = reorder(contrast, estimate)
+  )
+) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  geom_errorbar(
+    aes(
+      xmin = lower.CL,
+      xmax = upper.CL
+    ),
+    width = 0.2,
+    linewidth = 0.7
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  labs(
+    title = "Comparaciones múltiples de Tukey",
+    subtitle = "Todas las combinaciones temperatura × IPTG",
+    x = "Diferencia estimada entre medias (mg/L)",
+    y = NULL
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      hjust = 0.5
+    )
+  )
+
+g_tukey_todas
+
+
+
+
+
+pwpp(
+  emm_combinaciones,
+  adjust = "tukey"
+)
+
+
+pwpp(
+  emm_temp_por_IPTG,
+  adjust = "tukey"
+)
+
+
+
+# ============================================================
+# INTERPRETACIÓN DE LA GRÁFICA DE P-VALORES DE TUKEY
+# ============================================================
+
+# Cada panel corresponde a una concentración de IPTG.
+
+# Los puntos muestran las medias marginales estimadas
+# de producción de proteína para cada temperatura.
+
+# Las líneas conectan las temperaturas que se comparan entre sí.
+
+# El eje horizontal muestra el p-valor ajustado por Tukey.
+
+# p < 0.05:
+# las dos temperaturas presentan una diferencia significativa.
+
+# En este ejercicio, las comparaciones entre temperaturas
+# son significativas dentro de ambos niveles de IPTG.
+
+# Con IPTG = 0.1 mM:
+# 30 °C > 37 °C > 20 °C.
+
+# Con IPTG = 0.5 mM:
+# 30 °C > 20 °C > 37 °C.
+
+# El cambio en el orden de las temperaturas entre los dos niveles
+# de IPTG evidencia que el efecto de la temperatura depende
+# de la concentración de IPTG, es decir, existe interacción.
+
+# ============================================================
+# MATRIZ DE COMPARACIONES TUKEY
+# ============================================================
+
+tukey_todas <- pairs(
+  emm_combinaciones,
+  adjust = "tukey"
+)
+
+tukey_df <- as.data.frame(tukey_todas)
+
+tukey_df
+
+
+
+
+library(tidyr)
+
+tukey_heat <- tukey_df %>%
+  separate(
+    contrast,
+    into = c("Tratamiento_1", "Tratamiento_2"),
+    sep = " - "
+  )
+
+
+
+tukey_heat <- tukey_heat %>%
+  mutate(
+    significancia = case_when(
+      p.value < 0.001 ~ "p < 0.001",
+      p.value < 0.01  ~ "p < 0.01",
+      p.value < 0.05  ~ "p < 0.05",
+      TRUE            ~ "NS"
+    )
+  )
+
+
+
+ggplot(
+  tukey_heat,
+  aes(
+    x = Tratamiento_1,
+    y = Tratamiento_2,
+    fill = p.value
+  )
+) +
+
+  geom_tile(
+    color = "white",
+    linewidth = 1.5
+  ) +
+
+  geom_text(
+    aes(label = significancia),
+    size = 4,
+    fontface = "bold"
+  ) +
+
+  scale_fill_gradient(
+    low = "darkred",
+    high = "white",
+    limits = c(0, 1)
+  ) +
+
+  labs(
+    title = "Comparaciones múltiples de Tukey",
+    subtitle = "Temperatura × concentración de IPTG",
+    x = NULL,
+    y = NULL,
+    fill = "p-valor"
+  ) +
+
+  theme_minimal(base_size = 13) +
+
+  theme(
+    panel.grid = element_blank(),
+
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+
+    plot.title = element_text(
+      face = "bold",
+      hjust = 0.5
+    ),
+
+    plot.subtitle = element_text(
+      hjust = 0.5
+    )
+  )
+
+
+
+
+
+
+
+
+
+# ============================================================
+# 21. EXPORTAR TABLAS DE RESULTADOS
+# ============================================================
+
+write.csv(
+  resumen,
+  "resumen_descriptivo_factorial.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  as.data.frame(emm_combinaciones),
+  "medias_marginales_estimadas.csv",
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 22. GUÍA DE INTERPRETACIÓN PARA LOS ALUMNOS
+# ============================================================
+
+# EJEMPLO DE REDACCIÓN:
+#
+# "Se aplicó un ANOVA factorial de dos vías para evaluar el efecto
+# de la temperatura de inducción, la concentración de IPTG y su
+# interacción sobre la producción de proteína recombinante soluble.
+# Antes del análisis se evaluaron los residuos del modelo para
+# verificar normalidad, homogeneidad de varianzas y posibles
+# observaciones influyentes."
+#
+# Si interacción p < 0.05:
+#
+# "Se detectó una interacción significativa entre temperatura e IPTG,
+# lo que indica que el efecto de la concentración de IPTG depende de
+# la temperatura de inducción. Por este motivo se realizaron
+# comparaciones de efectos simples mediante medias marginales
+# estimadas con ajuste de Tukey."
+#
+# Si interacción p >= 0.05:
+#
+# "No se detectó evidencia de interacción entre los factores, por lo
+# que se interpretaron los efectos principales de temperatura e IPTG."
+#
+# IMPORTANTE:
+# No concluir únicamente con base en las gráficas.
+# Las gráficas ayudan a visualizar; la inferencia se obtiene del modelo.
+############################################################
